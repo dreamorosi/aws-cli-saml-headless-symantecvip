@@ -5,11 +5,11 @@
   "main": "src/index.js",
   "keywords": [
     "AWS",
-    "STS",
-    "SAML",
-    "SymantecVIP",
+    "sts",
+    "saml",
+    "symantec-vip",
     "puppeteer",
-    "headless"
+    "headless-chrome"
   ],
   "author": "Andrea Amorosi",
   "license": "MIT",
