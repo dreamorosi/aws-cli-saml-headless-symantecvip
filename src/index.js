@@ -1,14 +1,28 @@
+const path = require('path')
 const puppeteer = require('puppeteer')
 require('dotenv').config()
 const assert = require('assert')
 const inquirer = require('inquirer');
 const { STSClient, AssumeRoleWithSAMLCommand } = require('@aws-sdk/client-sts');
 
+//var eval = require('./eval');
+
+// Support for pkg
+const executablePath =
+  process.env.PUPPETEER_EXECUTABLE_PATH ||
+  (process.pkg
+    ? path.join(
+        path.dirname(process.execPath),
+        'puppeteer',
+        ...puppeteer
+          .executablePath()
+          .split(path.sep)
+          .slice(6), // /snapshot/project/node_modules/puppeteer/.local-chromium
+      )
+    : puppeteer.executablePath());
+
 const getUserInfo = async () => {
     // TODO: proper logging
-    // TODO: add keytar fallback if no env (only outside of container)
-    // const pass = await keytar.getPassword('aws-saml', os.userInfo().username)
-    // const keytar = require('keytar');
     // const os = require("os");
     // TODO: add support for command line input if previous two not present
     return {
@@ -22,16 +36,18 @@ const getUserInfo = async () => {
 const getSAMLnRoles = async (email, pass, url) => {
     // TODO: proper logging
     // Init a new browser
-    let browser = await puppeteer.launch({
+    const browser = await puppeteer.launch({
+        executablePath: executablePath,
         args: [
             // Required for Docker version of Puppeteer
             '--no-sandbox',
             '--disable-setuid-sandbox',
             // This will write shared memory files into /tmp instead of /dev/shm,
             // because Docker’s default for /dev/shm is 64MB
-            '--disable-dev-shm-usage'
+            // '--disable-dev-shm-usage'
         ]
     })
+    
 
     // Open new tab & attempt login (will redirect to Symantec VIP login form).
     let page = await browser.newPage()
@@ -55,10 +71,10 @@ const getSAMLnRoles = async (email, pass, url) => {
     await page.waitFor('#saml_form')
 
     // Get SAML Response from page.
-    const saml = await page.evaluate(() => {
-        return document.querySelector('#saml_form input[name="SAMLResponse"]').value
-    })
-    console.log('Saml Token OK')
+    // const saml = await page.evaluate(eval(`() => document.querySelector('#saml_form input[name="SAMLResponse"]').value`))
+    const samlEl = await page.$('#saml_form input[name="SAMLResponse"]')
+    const saml = await samlEl.getProperty('value')
+    sconsole.log('Saml Token OK')
 
     // TODO: Account for missing DOM Nodes/Attributes. 
     // Get AWS Accounts and IAM Roles.
@@ -91,6 +107,11 @@ const getSAMLnRoles = async (email, pass, url) => {
         roles: roles
     }
 }
+
+
+/*
+
+*/
 
 const chooseRole = async (accounts) => {
     // TODO: proper logging
