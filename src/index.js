@@ -3,23 +3,22 @@ const puppeteer = require('puppeteer')
 require('dotenv').config()
 const assert = require('assert')
 const inquirer = require('inquirer');
-const { STSClient, AssumeRoleWithSAMLCommand } = require('@aws-sdk/client-sts');
-
-//var eval = require('./eval');
+const { STS } = require('@aws-sdk/client-sts');
+const { exit } = require('process')
 
 // Support for pkg
 const executablePath =
-  process.env.PUPPETEER_EXECUTABLE_PATH ||
-  (process.pkg
-    ? path.join(
-        path.dirname(process.execPath),
-        'puppeteer',
-        ...puppeteer
-          .executablePath()
-          .split(path.sep)
-          .slice(6), // /snapshot/project/node_modules/puppeteer/.local-chromium
-      )
-    : puppeteer.executablePath());
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    (process.pkg
+        ? path.join(
+            path.dirname(process.execPath),
+            'puppeteer',
+            ...puppeteer
+                .executablePath()
+                .split(path.sep)
+                .slice(6), // /snapshot/project/node_modules/puppeteer/.local-chromium
+        )
+        : puppeteer.executablePath());
 
 const getUserInfo = async () => {
     // TODO: proper logging
@@ -47,7 +46,7 @@ const getSAMLnRoles = async (email, pass, url) => {
             // '--disable-dev-shm-usage'
         ]
     })
-    
+
 
     // Open new tab & attempt login (will redirect to Symantec VIP login form).
     let page = await browser.newPage()
@@ -71,33 +70,36 @@ const getSAMLnRoles = async (email, pass, url) => {
     await page.waitFor('#saml_form')
 
     // Get SAML Response from page.
-    // const saml = await page.evaluate(eval(`() => document.querySelector('#saml_form input[name="SAMLResponse"]').value`))
-    const samlEl = await page.$('#saml_form input[name="SAMLResponse"]')
-    const saml = await samlEl.getProperty('value')
-    sconsole.log('Saml Token OK')
+    let saml
+    try {
+        const samlEl = await page.$('#saml_form input[name="SAMLResponse"]')
+        saml = await (await samlEl.getProperty('value')).jsonValue()
+        console.log('Saml Token OK')
+    } catch (error) {
+        console.error(err);
+        console.error('Unable to retrieve SAML token.')
+        exit(1)
+    }
 
-    // TODO: Account for missing DOM Nodes/Attributes. 
-    // Get AWS Accounts and IAM Roles.
-    const roles = await page.evaluate(() => {
-        let accountsNodes = document.querySelectorAll('.saml-account:not([id])')
-        let accounts = {}
-        accountsNodes.forEach((el) => {
-            let accountLabel = el.querySelector('.saml-account-name').textContent
-            let accountId = accountLabel.match(/\d{12}/)
-            let rolesContainerNode = el.querySelectorAll(`.saml-account[id] .saml-role`)
-            let roles = []
-            rolesContainerNode.forEach(el => {
-                let roleLabel = el.querySelector('label')
-                roles.push({
-                    name: roleLabel.textContent,
-                    arn: roleLabel.getAttribute('for')
-                })
+    let roles = {}
+    try {
+        await asyncForEach((await page.$$(`.saml-account[id] .saml-role input.saml-radio`)), async (roleEl) => {
+            const arn = await (await roleEl.getProperty('value')).jsonValue();
+            const accountId = arn.match(/\d{12}/)
+            const name = arn.split('/')[1]
+            if (!(accountId in roles)) {
+                roles[accountId] = []
+            }
+            roles[accountId].push({
+                name: name,
+                arn: arn
             })
-            accounts[accountId] = roles
         })
-        return accounts
-    })
-
+    } catch (err) {
+        console.error(err);
+        console.error('Unable to retrieve IAM roles.')
+        exit(1)
+    }
     // Dispose of browser.
     await page.close()
     await browser.close()
@@ -108,10 +110,11 @@ const getSAMLnRoles = async (email, pass, url) => {
     }
 }
 
-
-/*
-
-*/
+async function asyncForEach(array, callback) {
+    for (let index = 0; index < array.length; index++) {
+        await callback(array[index], index, array);
+    }
+}
 
 const chooseRole = async (accounts) => {
     // TODO: proper logging
@@ -124,7 +127,6 @@ const chooseRole = async (accounts) => {
         accounts[account].forEach(role => choices.push(`${role.name} - ${role.arn}`))
     })
 
-    // TODO: check what happens if user presses ^C
     // Prompt user to choose.
     let answer = await prompt({
         type: 'list',
@@ -146,25 +148,15 @@ const chooseRole = async (accounts) => {
 
 const assumeRole = async (chosenRole, saml, idpName) => {
     // TODO: proper logging
-    // TODO: check for default AWS Region
-    // Create STS Client and build Assume Role w/ SAML command.
-    let client
-    let command
+    var sts = new STS();
+    var params = {
+        DurationSeconds: 3600,
+        PrincipalArn: `arn:aws:iam::${chosenRole.accountId}:saml-provider/${idpName}`,
+        RoleArn: chosenRole.roleArn,
+        SAMLAssertion: saml
+    };
     try {
-        client = new STSClient({ region: 'eu-west-1' });
-        command = new AssumeRoleWithSAMLCommand({
-            RoleArn: chosenRole.roleArn,
-            PrincipalArn: `arn:aws:iam::${chosenRole.accountId}:saml-provider/${idpName}`,
-            SAMLAssertion: saml,
-            DurationSeconds: 7200
-        })
-    } catch (err) {
-        console.error(err)
-        console.error('Unable to create STS Client/Command.')
-    }
-    // Attempt authentication.
-    try {
-        const response = await client.send(command);
+        const response = await sts.assumeRoleWithSAML(params)
         const { Credentials: credentials } = response
         return {
             accessKey: credentials.AccessKeyId,
@@ -187,7 +179,6 @@ const assumeRole = async (chosenRole, saml, idpName) => {
         userInfo.pass,
         userInfo.federationUrl
     )
-    // console.log(response.accounts)
 
     // TODO: check if there is only 1 account & 1 role OR default role is set, in that case skip this step.
     const chosenNole = await chooseRole(roles)
