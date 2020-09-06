@@ -4,7 +4,13 @@ require('dotenv').config()
 const assert = require('assert')
 const inquirer = require('inquirer');
 const { STS } = require('@aws-sdk/client-sts');
-const { exit } = require('process')
+const process = require('process')
+const util = require('util')
+const fs = require('fs')
+const ProgressBar = require('progress');
+var parseString = util.promisify(require('xml2js').parseString);
+
+const chromeRevision = '756035'
 
 // Support for pkg
 const executablePath =
@@ -23,135 +29,174 @@ const executablePath =
 const getUserInfo = async () => {
     // TODO: proper logging
     // const os = require("os");
-    // TODO: add support for command line input if previous two not present
+    // TODO: add support for command line input with priority 1, then environment vars prio 2, then default/errors 3.
     return {
         email: process.env.EMAIL,
         pass: process.env.PASS,
         federationUrl: process.env.URL,
-        idpName: process.env.IDPNAME
+        durationSeconds: parseInt(process.env.DURATION_SECONDS)
     }
 }
 
-const getSAMLnRoles = async (email, pass, url) => {
-    // TODO: proper logging
-    // Init a new browser
-    const browser = await puppeteer.launch({
-        executablePath: executablePath,
-        args: [
-            // Required for Docker version of Puppeteer
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            // This will write shared memory files into /tmp instead of /dev/shm,
-            // because Docker’s default for /dev/shm is 64MB
-            // '--disable-dev-shm-usage'
-        ]
-    })
-
-
-    // Open new tab & attempt login (will redirect to Symantec VIP login form).
-    let page = await browser.newPage()
-    const response = await page.goto(url)
-
-    // Make sure correct page is loaded.
-    assert(response.ok())
-    // TODO: add more checks.
-
-    // Fill auth form and submit.
-    await page.type('#userNameInput', email);
-    await page.type('#passwordInput', pass);
-    await page.click('#submitButton');
-    // TODO: account for wrong credentials
-
-    // Wait for login to be verified and second page to appear.
-    await page.waitFor('#vipSkipBtn');
-    await page.click('#vipSkipBtn');
-
-    // Wait for AWS SAML Login page to appear.
-    await page.waitFor('#saml_form')
-
-    // Get SAML Response from page.
-    let saml
+const getSAMLResponse = async (email, pass, url) => {
+    // TODO: proper logging - convert all the console.err to debug when verbose + add additional verbosity for success
+    // Start a browser and open a tab.
+    let browser
+    let page
     try {
-        const samlEl = await page.$('#saml_form input[name="SAMLResponse"]')
-        saml = await (await samlEl.getProperty('value')).jsonValue()
-        console.log('Saml Token OK')
-    } catch (error) {
+        browser = await puppeteer.launch({
+            executablePath: executablePath,
+            args: [
+                // Required for Docker version of Puppeteer
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                // This will write shared memory files into /tmp instead of /dev/shm,
+                // because Docker’s default for /dev/shm is 64MB
+                // '--disable-dev-shm-usage'
+            ]
+        })
+        page = await browser.newPage()
+    } catch (err) {
         console.error(err);
-        console.error('Unable to retrieve SAML token.')
-        exit(1)
+        console.error('Unable to start Chromium headless browser.')
+        process.exit(1)
     }
 
-    let roles = {}
+    console.log('Sending Push notification - Get your phone ready!')
+
+    // Navigate to the AWS page, this will redirect to the SymantecVIP login page of the org.
     try {
-        await asyncForEach((await page.$$(`.saml-account[id] .saml-role input.saml-radio`)), async (roleEl) => {
-            const arn = await (await roleEl.getProperty('value')).jsonValue();
-            const accountId = arn.match(/\d{12}/)
-            const name = arn.split('/')[1]
+        const response = await page.goto(url)
+        assert(response.ok())
+    } catch (err) {
+        console.error(err);
+        console.error(`Unable to navigate to ${url}.`)
+        process.exit(1)
+    }
+
+    // TODO: account for wrong credentials + allow selectors customization
+    // Fill login form
+    try {
+        await page.type('#userNameInput', email);
+        await page.type('#passwordInput', pass);
+        await page.click('#submitButton');
+    } catch (err) {
+        console.error(err);
+        console.error(`Unable to fill login form.`)
+        process.exit(1)
+    }
+
+    // Wait for login to be verified and second page to appear.
+    try {
+        await page.waitFor('#vipSkipBtn');
+        await page.click('#vipSkipBtn');
+    } catch (err) {
+        console.error(err);
+        console.error(`Unable to login, page might have timed out, try again.`)
+        process.exit(1)
+    }
+
+    // Wait for AWS SAML Signin page to respond.
+    let saml
+    try {
+        let res = await page.waitForResponse('https://signin.aws.amazon.com/saml')
+        let samlResponse = res.request().postData()
+        saml = decodeURIComponent(samlResponse.split('SAMLResponse=')[1])
+    } catch (err) {
+        console.error(err);
+        console.error(`Unable to retrieve IdP SAML Response.`)
+        process.exit(1)
+    }
+
+    // Dispose of browser.
+    try {
+        await page.close()
+        await browser.close()
+    } catch (err) {
+        console.error(err);
+        console.error(`Unable to close Chromium browser.`)
+        process.exit(1)
+    }
+
+    return saml
+}
+
+const parseRoles = async (saml) => {
+    let rolesList
+    try {
+        const xmlString = new Buffer.from(saml, 'base64').toString('ascii')
+        const xml = await parseString(xmlString)
+        rolesList = xml['samlp:Response'].Assertion[0].AttributeStatement[0].Attribute[1].AttributeValue
+    } catch (err) {
+        console.error(err);
+        console.error(`Unable to parse SAML Response and extract IAM Roles.`)
+        process.exit(1)
+    }
+
+    const roles = {}
+    try {
+        rolesList.forEach(role => {
+            const accountId = role.match(/\d{12}/)
+            const [principalArn, roleArn] = role.split(',')
+            const roleName = roleArn.split('/')[1]
             if (!(accountId in roles)) {
                 roles[accountId] = []
             }
             roles[accountId].push({
-                name: name,
-                arn: arn
+                roleName: roleName,
+                roleArn: roleArn,
+                principalArn: principalArn
             })
         })
     } catch (err) {
         console.error(err);
-        console.error('Unable to retrieve IAM roles.')
-        exit(1)
+        console.error(`Unable to format IAM Roles.`)
+        process.exit(1)
     }
-    // Dispose of browser.
-    await page.close()
-    await browser.close()
 
     return {
-        saml: saml,
-        roles: roles
+        roles: roles,
+        isOnlyOne: false
     }
 }
 
-async function asyncForEach(array, callback) {
-    for (let index = 0; index < array.length; index++) {
-        await callback(array[index], index, array);
-    }
-}
-
-const chooseRole = async (accounts) => {
+const chooseRole = async (roles) => {
     // TODO: proper logging
     var prompt = inquirer.createPromptModule();
 
     // Create choices array.
     let choices = []
-    Object.keys(accounts).forEach(account => {
+    Object.keys(roles).forEach(account => {
         choices.push(new inquirer.Separator(`-- ${account} --`))
-        accounts[account].forEach(role => choices.push(`${role.name} - ${role.arn}`))
+        roles[account].forEach(role => choices.push(`${role.roleName} - ${role.roleArn}`))
     })
 
     // Prompt user to choose.
     let answer = await prompt({
         type: 'list',
-        name: 'role',
+        name: 'chosenRole',
         message: 'Choose an IAM Role:',
         choices: choices
     })
 
     // Extract IAM Role ARN and AWS Account ID.
-    const { role } = answer
-    let arn = role.split(' - ')[1]
-    let account = arn.match(/\d{12}/)[0]
+    const { chosenRole } = answer
+    let roleArn = chosenRole.split(' - ')[1]
+    let accountId = roleArn.match(/\d{12}/)[0]
+    const role = roles[accountId].find(role => role.roleArn === roleArn)
 
     return {
-        roleArn: arn,
-        accountId: account
+        roleArn: roleArn,
+        principalArn: role.principalArn
     }
 }
 
-const assumeRole = async (chosenRole, saml, idpName) => {
+const assumeRole = async (chosenRole, saml, durationSeconds) => {
     // TODO: proper logging
     var sts = new STS();
     var params = {
-        DurationSeconds: 3600,
-        PrincipalArn: `arn:aws:iam::${chosenRole.accountId}:saml-provider/${idpName}`,
+        DurationSeconds: durationSeconds,
+        PrincipalArn: chosenRole.principalArn,
         RoleArn: chosenRole.roleArn,
         SAMLAssertion: saml
     };
@@ -167,23 +212,75 @@ const assumeRole = async (chosenRole, saml, idpName) => {
     } catch (err) {
         console.error(err);
         console.error('Unable to assume IAM Role.')
+        process.exit(1)
     }
 }
 
+const downloadChromium = async () => {
+    const browserFetcher = puppeteer.createBrowserFetcher({
+        path: `${process.cwd()}/puppeteer`,
+        host: 'https://storage.googleapis.com',
+    });
+    try {
+        await fetchBinary(browserFetcher, chromeRevision);
+        const revisionInfo = browserFetcher.revisionInfo(chromeRevision);
+        console.log(
+            `chrome (${revisionInfo.revision}) downloaded to ${revisionInfo.folderPath}`
+        );
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
+}
+
+const fetchBinary = (browserFetcher, revision) => {
+    let progressBar = null;
+    let lastDownloadedBytes = 0;
+    const onProgress = (downloadedBytes, totalBytes) => {
+        if (!progressBar) {
+            progressBar = new ProgressBar(
+                `Downloading chrome r${revision} - ${Math.round(totalBytes / 1024 / 1024 * 10) / 10} Mb [:bar] :percent :etas `,
+                {
+                    complete: '=',
+                    incomplete: ' ',
+                    width: 20,
+                    total: totalBytes,
+                }
+            );
+        }
+        const delta = downloadedBytes - lastDownloadedBytes;
+        lastDownloadedBytes = downloadedBytes;
+        progressBar.tick(delta);
+    }
+
+    return browserFetcher.download(revision, onProgress)
+}
+
 (async () => {
+    // TODO: check how does this behave on Win & Linux
+    // TODO: log that this is a one-time process and it might take a few seconds
+    if (process.pkg && !fs.existsSync(`${process.cwd()}/puppeteer`)) {
+        await downloadChromium();
+    }
+
     const userInfo = await getUserInfo()
-    console.log('Authenticating')
-    // TODO: add support for default role; in that case retrieve SAML & verify role existence.
-    const { saml, roles } = await getSAMLnRoles(
+
+    const saml = await getSAMLResponse(
         userInfo.email,
         userInfo.pass,
         userInfo.federationUrl
     )
 
-    // TODO: check if there is only 1 account & 1 role OR default role is set, in that case skip this step.
-    const chosenNole = await chooseRole(roles)
+    // TODO: add support for default role; in that case retrieve SAML & verify role existence. If it exists return only that one.
+    const { roles, isOnlyOne } = await parseRoles(saml)
 
-    const credentials = await assumeRole(chosenNole, saml, userInfo.idpName)
+    if (isOnlyOne) {
+        chosenRole = roles[Object.keys(roles)[0]][0]
+    } else {
+        chosenRole = await chooseRole(roles)
+    }
+
+    const credentials = await assumeRole(chosenRole, saml, userInfo.durationSeconds)
 
     console.log(`aws_access_key_id = ${credentials.accessKey}`)
     console.log(`aws_secret_access_key = ${credentials.secretkey}`)
