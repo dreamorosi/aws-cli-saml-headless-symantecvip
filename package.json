@@ -1,6 +1,6 @@
 {
   "name": "aws-cli-saml-headless-symantecvip",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "description": "Get temporary AWS CLI credentials via STS Assume Role w/ SAML using token retrieved via Enterprise Symantec VIP MFA login.",
   "main": "src/index.js",
   "keywords": [
@@ -18,11 +18,22 @@
     "url": "https://github.com/dreamorosi/aws-cli-saml-headless-symantecvip.git"
   },
   "dependencies": {
-    "@aws-sdk/client-sts": "^1.0.0-beta.5",
+    "@aws-sdk/client-sts": "^1.0.0-gamma.8",
     "dotenv": "^8.2.0",
-    "inquirer": "^7.1.0"
+    "inquirer": "^7.3.3",
+    "puppeteer": "^3.3.0",
+    "xml2js": "^0.4.23"
   },
   "devDependencies": {
-    "puppeteer": "^3.0.4"
+    "pkg": "^4.4.9",
+    "rimraf": "^3.0.2"
+  },
+  "scripts": {
+    "build-macos": "rimraf dist && pkg -t macos --out-path dist src/index.js && mv dist/index dist/aws-cli-saml",
+    "build-macos-w-puppeteer": "rimraf dist && pkg -t macos --out-path dist src/index.js && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/index dist/aws-cli-saml",
+    "build-win": "rimraf dist && pkg -t win --out-path dist src/index.js && mv dist/index.exe dist/aws-cli-saml.exe",
+    "build-win-w-puppeteer": "rimraf dist && pkg -t win --out-path dist src/index.js && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/index.exe dist/aws-cli-saml.exe",
+    "build-linux": "rimraf dist && pkg -t linux --out-path dist src/index.js && mv dist/index dist/aws-cli-saml",
+    "build-win-w-linux": "rimraf dist && pkg -t linux --out-path dist src/index.js && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/index dist/aws-cli-saml"
   }
 }
