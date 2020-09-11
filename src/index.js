@@ -10,8 +10,6 @@ const fs = require('fs')
 const ProgressBar = require('progress');
 var parseString = util.promisify(require('xml2js').parseString);
 
-const chromeRevision = '756035'
-
 // Support for pkg
 const executablePath =
     process.env.PUPPETEER_EXECUTABLE_PATH ||
@@ -30,6 +28,10 @@ const getUserInfo = async () => {
     // TODO: proper logging
     // const os = require("os");
     // TODO: add support for command line input with priority 1, then environment vars prio 2, then default/errors 3.
+    if (!fs.existsSync(path.join(path.dirname(process.execPath), '.env'))) {
+        console.warn(`No .env file found, unable to retrieve configurations.\nPlease create one at ${path.join(path.dirname(process.execPath))} as explained in the README.`)
+        process.exit(1)
+    }
     return {
         email: process.env.EMAIL,
         pass: process.env.PASS,
@@ -216,30 +218,19 @@ const assumeRole = async (chosenRole, saml, durationSeconds) => {
     }
 }
 
-const downloadChromium = async () => {
+const downloadChromium = async (downloadPath) => {
     const browserFetcher = puppeteer.createBrowserFetcher({
-        path: `${process.cwd()}/puppeteer`,
+        path: downloadPath,
         host: 'https://storage.googleapis.com',
     });
-    try {
-        await fetchBinary(browserFetcher, chromeRevision);
-        const revisionInfo = browserFetcher.revisionInfo(chromeRevision);
-        console.log(
-            `chrome (${revisionInfo.revision}) downloaded to ${revisionInfo.folderPath}`
-        );
-    } catch (err) {
-        console.error(err);
-        process.exit(1);
-    }
-}
 
-const fetchBinary = (browserFetcher, revision) => {
+    const chromeRevision = '756035'
     let progressBar = null;
     let lastDownloadedBytes = 0;
     const onProgress = (downloadedBytes, totalBytes) => {
         if (!progressBar) {
             progressBar = new ProgressBar(
-                `Downloading chrome r${revision} - ${Math.round(totalBytes / 1024 / 1024 * 10) / 10} Mb [:bar] :percent :etas `,
+                `Downloading chrome r${chromeRevision} - ${Math.round(totalBytes / 1024 / 1024 * 10) / 10} Mb [:bar] :percent :etas `,
                 {
                     complete: '=',
                     incomplete: ' ',
@@ -253,14 +244,23 @@ const fetchBinary = (browserFetcher, revision) => {
         progressBar.tick(delta);
     }
 
-    return browserFetcher.download(revision, onProgress)
+    try {
+        console.log(`A special version of Chrome required by this software will be downloaded at to ${downloadPath}.\nThis is a one-time process and might take a few seconds.`)
+        await browserFetcher.download(chromeRevision, onProgress)
+        const revisionInfo = browserFetcher.revisionInfo(chromeRevision);
+        console.log(
+            `Chrome (${revisionInfo.revision}) download completed.\n`
+        );
+    } catch (err) {
+        console.error(err);
+        process.exit(1);
+    }
 }
 
 (async () => {
-    // TODO: check how does this behave on Win & Linux
-    // TODO: log that this is a one-time process and it might take a few seconds
-    if (process.pkg && !fs.existsSync(`${process.cwd()}/puppeteer`)) {
-        await downloadChromium();
+    const downloadPath = path.join(path.dirname(process.execPath), 'puppeteer')
+    if (process.pkg && !fs.existsSync(downloadPath)) {
+        await downloadChromium(downloadPath);
     }
 
     const userInfo = await getUserInfo()
