@@ -1,6 +1,6 @@
 {
   "name": "aws-cli-saml-headless-symantecvip",
-  "version": "0.8.0",
+  "version": "0.8.3",
   "description": "Get temporary AWS CLI credentials via STS Assume Role w/ SAML using token retrieved via Enterprise Symantec VIP MFA login.",
   "main": "src/index.js",
   "keywords": [
