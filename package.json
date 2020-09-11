@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "pkg": "^4.4.9",
+    "prettier": "^2.1.1",
     "rimraf": "^3.0.2"
   },
   "scripts": {
