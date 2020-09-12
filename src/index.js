@@ -235,7 +235,6 @@ const chooseRole = async (roles) => {
   const { chosenRole } = answer;
   let roleArn = chosenRole.split(" - ")[1];
   let accountId = roleArn.match(/\d{12}/)[0];
-  const role = roles[accountId].find((role) => role.roleArn === roleArn);
 
   return roles[accountId].find((role) => role.roleArn === roleArn);
 };
