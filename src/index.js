@@ -10,6 +10,7 @@ const fs = require("fs");
 const ProgressBar = require("progress");
 var parseString = util.promisify(require("xml2js").parseString);
 const meow = require("meow");
+const leven = require("leven");
 
 // Support for pkg
 const executablePath =
@@ -176,14 +177,18 @@ const applyFlagRole = (flaggedRole, roles) => {
   let isArn = Boolean(roleArn);
 
   let matchedRoles = {};
+  let possibleMatches = [];
   Object.keys(roles).forEach((account) => {
     roles[account].forEach((role) => {
       let toMatch = isArn ? role.roleArn : role.roleName;
-      if (toMatch === flaggedRole) {
+      let dist = leven(toMatch, flaggedRole);
+      if (dist == 0) {
         if (!(account in matchedRoles)) {
           matchedRoles[account] = [];
         }
         matchedRoles[account].push(role);
+      } else if (dist <= 5) {
+        possibleMatches.push(role.roleArn);
       }
     });
   });
@@ -194,6 +199,11 @@ const applyFlagRole = (flaggedRole, roles) => {
     console.error(
       `None of the roles in the SAML response matches with the selected one.`
     );
+    if (possibleMatches.length > 0) {
+      let determiner = possibleMatches.length === 0 ? "this" : "one of these";
+      console.log(`Did you mean ${determiner}?`);
+      possibleMatches.forEach((match) => console.log(`- ${match}`));
+    }
     process.exit(1);
   }
 
@@ -240,6 +250,7 @@ const assumeRole = async (chosenRole, saml, durationSeconds) => {
     SAMLAssertion: saml,
   };
   try {
+    console.log(`Assuming role ${chosenRole.roleArn}.`);
     const response = await sts.assumeRoleWithSAML(params);
     const { Credentials: credentials } = response;
     return {
