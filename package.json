@@ -32,11 +32,15 @@
     "rimraf": "^3.0.2"
   },
   "scripts": {
-    "build-macos": "rimraf dist && pkg -t macos --out-path dist src/index.js && mv dist/index dist/aws-cli-saml",
-    "build-macos-w-puppeteer": "rimraf dist && pkg -t macos --out-path dist src/index.js && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/index dist/aws-cli-saml",
-    "build-win": "rimraf dist && pkg -t win --out-path dist src/index.js && mv dist/index.exe dist/aws-cli-saml.exe",
-    "build-win-w-puppeteer": "rimraf dist && pkg -t win --out-path dist src/index.js && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/index.exe dist/aws-cli-saml.exe",
-    "build-linux": "rimraf dist && pkg -t linux --out-path dist src/index.js && mv dist/index dist/aws-cli-saml",
-    "build-win-w-linux": "rimraf dist && pkg -t linux --out-path dist src/index.js && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/index dist/aws-cli-saml"
-  }
+    "build-macos": "rimraf dist && pkg -t macos --out-path dist . && mv dist/aws-cli-saml-headless-symantecvip dist/aws-cli-saml",
+    "build-macos-w-puppeteer": "rimraf dist && pkg -t macos --out-path dist . && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/aws-cli-saml-headless-symantecvip dist/aws-cli-saml",
+    "build-win": "rimraf dist && pkg -t win --out-path dist . && mv dist/aws-cli-saml-headless-symantecvip.exe dist/aws-cli-saml.exe",
+    "build-win-w-puppeteer": "rimraf dist && pkg -t win --out-path dist . && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/aws-cli-saml-headless-symantecvip.exe dist/aws-cli-saml.exe",
+    "build-linux": "rimraf dist && pkg -t linux --out-path dist . && mv dist/aws-cli-saml-headless-symantecvip dist/aws-cli-saml",
+    "build-linux-w-puppeteer": "rimraf dist && pkg -t linux --out-path dist . && cp -R node_modules/puppeteer/.local-chromium dist/puppeteer && mv dist/aws-cli-saml-headless-symantecvip dist/aws-cli-saml"
+  },
+  "pkg": {
+    "assets": "package.json"
+  },
+  "bin": "src/index.js"
 }
