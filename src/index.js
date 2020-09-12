@@ -9,6 +9,7 @@ const util = require("util");
 const fs = require("fs");
 const ProgressBar = require("progress");
 var parseString = util.promisify(require("xml2js").parseString);
+const meow = require("meow");
 
 // Support for pkg
 const executablePath =
@@ -160,10 +161,43 @@ const parseRoles = async (saml) => {
     process.exit(1);
   }
 
-  return {
-    roles: roles,
-    isOnlyOne: false,
-  };
+  try {
+    assert(Object.keys(roles).length > 0);
+  } catch {
+    console.error(`No role was returned in the SAML response.`);
+    process.exit(1);
+  }
+
+  return roles;
+};
+
+const applyFlagRole = (flaggedRole, roles) => {
+  let roleArn = flaggedRole.match(/((arn|aws|iam)\:){3}\:(\d){12}\:role\/\S+/);
+  let isArn = Boolean(roleArn);
+
+  let matchedRoles = {};
+  Object.keys(roles).forEach((account) => {
+    roles[account].forEach((role) => {
+      let toMatch = isArn ? role.roleArn : role.roleName;
+      if (toMatch === flaggedRole) {
+        if (!(account in matchedRoles)) {
+          matchedRoles[account] = [];
+        }
+        matchedRoles[account].push(role);
+      }
+    });
+  });
+
+  try {
+    assert(Object.keys(matchedRoles).length > 0);
+  } catch {
+    console.error(
+      `None of the roles in the SAML response matches with the selected one.`
+    );
+    process.exit(1);
+  }
+
+  return matchedRoles;
 };
 
 const chooseRole = async (roles) => {
@@ -193,10 +227,7 @@ const chooseRole = async (roles) => {
   let accountId = roleArn.match(/\d{12}/)[0];
   const role = roles[accountId].find((role) => role.roleArn === roleArn);
 
-  return {
-    roleArn: roleArn,
-    principalArn: role.principalArn,
-  };
+  return roles[accountId].find((role) => role.roleArn === roleArn);
 };
 
 const assumeRole = async (chosenRole, saml, durationSeconds) => {
@@ -266,7 +297,31 @@ const downloadChromium = async (downloadPath) => {
   }
 };
 
-(async () => {
+const cli = meow(
+  `
+	Usage
+	  $ aws-cli-saml
+
+	Options
+    --role, -r  Accepts an IAM Role name or arn that will be used to
+                authenticate if present in the SAML Response.
+
+  Examples
+    $ aws-cli-saml
+    $ aws-cli-saml --role my_role_name
+    $ aws-cli-saml --role arn:aws:iam::123456789101:role/my_role_name
+`,
+  {
+    flags: {
+      role: {
+        type: "string",
+        alias: "r",
+      },
+    },
+  }
+);
+
+(async (flags) => {
   const downloadPath = path.join(path.dirname(process.execPath), "puppeteer");
   if (process.pkg && !fs.existsSync(downloadPath)) {
     await downloadChromium(downloadPath);
@@ -280,10 +335,13 @@ const downloadChromium = async (downloadPath) => {
     userInfo.federationUrl
   );
 
-  // TODO: add support for default role; in that case retrieve SAML & verify role existence. If it exists return only that one.
-  const { roles, isOnlyOne } = await parseRoles(saml);
+  let roles = await parseRoles(saml);
 
-  if (isOnlyOne) {
+  if (flags.role) {
+    roles = applyFlagRole(flags.role, roles);
+  }
+
+  if (Object.keys(roles).length === 1) {
     chosenRole = roles[Object.keys(roles)[0]][0];
   } else {
     chosenRole = await chooseRole(roles);
@@ -300,4 +358,4 @@ const downloadChromium = async (downloadPath) => {
   console.log(`aws_session_token  = ${credentials.token}`);
 
   console.log(`Credentials will expire at ${credentials.expiration}`);
-})();
+})(cli.flags);
