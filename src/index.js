@@ -40,9 +40,11 @@ const getUserInfo = async () => {
     email: process.env.EMAIL,
     pass: process.env.PASS,
     federationUrl: process.env.URL,
-    durationSeconds: parseInt(process.env.DURATION_SECONDS),
   };
 };
+
+const getDurationSeconds = (flags) =>
+  parseInt(flags.durationSeconds || process.env.DURATION_SECONDS || 3600);
 
 const getSAMLResponse = async (email, pass, url) => {
   // TODO: proper logging - convert all the console.err to debug when verbose + add additional verbosity for success
@@ -313,19 +315,25 @@ const cli = meow(
 	  $ aws-cli-saml
 
 	Options
-    --role, -r  Accepts an IAM Role name or arn that will be used to
-                authenticate if present in the SAML Response.
+    --role, -r      IAM Role name or arn to be used for authentication.
+
+    --duration, -d  Duration of temporary credentials in seconds.
 
   Examples
     $ aws-cli-saml
     $ aws-cli-saml --role my_role_name
     $ aws-cli-saml --role arn:aws:iam::123456789101:role/my_role_name
+    $ aws-cli-saml --duration 10800
 `,
   {
     flags: {
       role: {
         type: "string",
         alias: "r",
+      },
+      durationSeconds: {
+        type: "number",
+        alias: "d",
       },
     },
   }
@@ -337,12 +345,15 @@ const cli = meow(
     await downloadChromium(downloadPath);
   }
 
-  const userInfo = await getUserInfo();
+  const configs = {
+    ...(await getUserInfo()),
+    durationSeconds: getDurationSeconds(flags),
+  };
 
   const saml = await getSAMLResponse(
-    userInfo.email,
-    userInfo.pass,
-    userInfo.federationUrl
+    configs.email,
+    configs.pass,
+    configs.federationUrl
   );
 
   let roles = await parseRoles(saml);
@@ -360,7 +371,7 @@ const cli = meow(
   const credentials = await assumeRole(
     chosenRole,
     saml,
-    userInfo.durationSeconds
+    configs.durationSeconds
   );
 
   console.log(`aws_access_key_id = ${credentials.accessKey}`);
