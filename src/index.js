@@ -340,6 +340,11 @@ const cli = meow(
 );
 
 (async (flags) => {
+  await keytar.setPassword("aws-cli-saml", "a.amorosi", "test");
+
+  console.log(await keytar.getPassword("aws-cli-saml", "a.amorosi"));
+
+  return false;
   const downloadPath = path.join(path.dirname(process.execPath), "puppeteer");
   if (process.pkg && !fs.existsSync(downloadPath)) {
     await downloadChromium(downloadPath);
