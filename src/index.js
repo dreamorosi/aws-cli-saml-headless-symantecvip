@@ -1,16 +1,17 @@
 const path = require("path");
 const puppeteer = require("puppeteer");
-require("dotenv").config();
 const assert = require("assert");
 const inquirer = require("inquirer");
 const { STS } = require("@aws-sdk/client-sts");
 const process = require("process");
 const util = require("util");
-const fs = require("fs");
+const fs = require("fs").promises;
 const ProgressBar = require("progress");
 var parseString = util.promisify(require("xml2js").parseString);
 const meow = require("meow");
 const leven = require("leven");
+const os = require("os");
+const YAML = require("yaml");
 
 // Support for pkg
 const executablePath =
@@ -23,30 +24,38 @@ const executablePath =
       )
     : puppeteer.executablePath());
 
-const getUserInfo = async () => {
+const confPath = path.join(os.homedir(), ".aws", ".saml.conf");
+
+const loadConfigs = async (flags) => {
   // TODO: proper logging
-  // const os = require("os");
-  // TODO: add support for command line input with priority 1, then environment vars prio 2, then default/errors 3.
-  if (!fs.existsSync(path.join(path.dirname(process.execPath), ".env"))) {
-    console.warn(
-      `No .env file found, unable to retrieve configurations.
-      Please create one at ${path.join(
-        path.dirname(process.execPath)
-      )} as explained in the README.`
+  let configs = {};
+  try {
+    let confData = await fs.readFile(confPath, "utf-8");
+    configs = YAML.parse(confData);
+    assert("userName" in configs && "federationUrl" in configs);
+  } catch {
+    console.error(
+      `Configuration file is missing or corrupted.
+
+Run "aws-cli-saml configure" to recreate it.`
     );
     process.exit(1);
   }
+
   return {
-    email: process.env.EMAIL,
-    pass: process.env.PASS,
-    federationUrl: process.env.URL,
+    userName: process.env.USER_NAME || configs.userName,
+    federationUrl: process.env.FEDERATION_URL || configs.federationUrl,
+    userInput: configs.userInput || "#userNameInput",
+    passInput: configs.passInput || "#passwordInput",
+    submitBtn: configs.submitBtn || "#submitButton",
+    skipBtn: configs.skipBtn || "#vipSkipBtn",
+    durationSeconds: parseInt(
+      flags.durationSeconds || process.env.DURATION_SECONDS || 3600
+    ),
   };
 };
 
-const getDurationSeconds = (flags) =>
-  parseInt(flags.durationSeconds || process.env.DURATION_SECONDS || 3600);
-
-const getSAMLResponse = async (email, pass, url) => {
+const getSAMLResponse = async (configs) => {
   // TODO: proper logging - convert all the console.err to debug when verbose + add additional verbosity for success
   // Start a browser and open a tab.
   let browser;
@@ -74,20 +83,20 @@ const getSAMLResponse = async (email, pass, url) => {
 
   // Navigate to the AWS page, this will redirect to the SymantecVIP login page of the org.
   try {
-    const response = await page.goto(url);
+    const response = await page.goto(configs.federationUrl);
     assert(response.ok());
   } catch (err) {
     console.error(err);
-    console.error(`Unable to navigate to ${url}.`);
+    console.error(`Unable to navigate to ${configs.federationUrl}.`);
     process.exit(1);
   }
 
-  // TODO: account for wrong credentials + allow selectors customization
+  // TODO: account for wrong credentials
   // Fill login form
   try {
-    await page.type("#userNameInput", email);
-    await page.type("#passwordInput", pass);
-    await page.click("#submitButton");
+    await page.type(configs.userInput, configs.userName);
+    await page.type(configs.passInput, configs.pass);
+    await page.click(configs.submitBtn);
   } catch (err) {
     console.error(err);
     console.error(`Unable to fill login form.`);
@@ -96,8 +105,8 @@ const getSAMLResponse = async (email, pass, url) => {
 
   // Wait for login to be verified and second page to appear.
   try {
-    await page.waitFor("#vipSkipBtn");
-    await page.click("#vipSkipBtn");
+    await page.waitFor(configs.skipBtn);
+    await page.click(configs.skipBtn);
   } catch (err) {
     console.error(err);
     console.error(`Unable to login, page might have timed out, try again.`);
@@ -298,7 +307,7 @@ const downloadChromium = async (downloadPath) => {
   try {
     console.log(
       `A special version of Chrome will be downloaded at to ${downloadPath}.
-      This is a required one-time process and might take a few seconds.`
+This is a required one-time process and might take a few seconds.`
     );
     await browserFetcher.download(chromeRevision, onProgress);
     const revisionInfo = browserFetcher.revisionInfo(chromeRevision);
@@ -309,21 +318,121 @@ const downloadChromium = async (downloadPath) => {
   }
 };
 
+const askPass = async (userName) => {
+  let prompt = inquirer.createPromptModule();
+  console.log(`Logging in as ${userName}:`);
+  let answers = await prompt([
+    {
+      type: "password",
+      name: "pass",
+      message: "Password:",
+      validate: (input) =>
+        input.trim() ? true : "Password field cannot be empty.",
+    },
+  ]);
+
+  return answers;
+};
+
+const configure = async (isAdvanced) => {
+  let prompt = inquirer.createPromptModule();
+
+  let configs;
+  try {
+    let confData = await fs.readFile(confPath, "utf-8");
+    configs = YAML.parse(confData);
+  } catch {
+    configs = {
+      userName: os.userInfo().username,
+      federationUrl: "",
+      userInput: "#userNameInput",
+      passInput: "#passwordInput",
+      submitBtn: "#submitButton",
+      skipBtn: "#vipSkipBtn",
+    };
+  }
+
+  let questions = [
+    {
+      type: "input",
+      name: "userName",
+      message: "Username:",
+      default: configs.userName,
+    },
+    {
+      type: "input",
+      name: "federationUrl",
+      message: "Federation:",
+      default: configs.federationUrl,
+    },
+  ];
+
+  if (isAdvanced) {
+    questions = [
+      ...questions,
+      {
+        type: "input",
+        name: "userInput",
+        message: "Username input field selector:",
+        default: configs.userInput,
+      },
+      {
+        type: "input",
+        name: "passInput",
+        message: "Password input field selector:",
+        default: configs.passInput,
+      },
+      {
+        type: "input",
+        name: "submitBtn",
+        message: "Submit button selector:",
+        default: configs.submitBtn,
+      },
+      {
+        type: "input",
+        name: "skipBtn",
+        message: "Skip button selector:",
+        default: configs.skipBtn,
+      },
+    ];
+  }
+
+  let answers = await prompt(questions);
+
+  try {
+    await fs.access(confPath.split(path.sep).splice(0, 4).join(path.sep));
+  } catch {
+    await fs.mkdir(confPath.split(path.sep).splice(0, 4).join(path.sep));
+  }
+  await fs.writeFile(confPath, YAML.stringify(answers), "utf8");
+  console.log(`Configuration file stored at ${confPath}.`);
+  process.exit(0);
+};
+
 const cli = meow(
   `
 	Usage
-	  $ aws-cli-saml
+    $ aws-cli-saml <input>
+    
+  Arguments
+    help            Shows this help message.
+    configure       Initiates configuration flow.
 
 	Options
     --role, -r      IAM Role name or arn to be used for authentication.
 
     --duration, -d  Duration of temporary credentials in seconds.
 
+    --advanced      Presents additional settings during configuration flow.
+
   Examples
     $ aws-cli-saml
     $ aws-cli-saml --role my_role_name
     $ aws-cli-saml --role arn:aws:iam::123456789101:role/my_role_name
     $ aws-cli-saml --duration 10800
+
+    $ aws-cli-saml configure
+    $ aws-cli-saml configure --advanced
 `,
   {
     flags: {
@@ -335,26 +444,47 @@ const cli = meow(
         type: "number",
         alias: "d",
       },
+      advanced: {
+        type: "boolean",
+      },
     },
   }
 );
 
-(async (flags) => {
-  const downloadPath = path.join(path.dirname(process.execPath), "puppeteer");
-  if (process.pkg && !fs.existsSync(downloadPath)) {
-    await downloadChromium(downloadPath);
+(async (inputs, flags) => {
+  if (inputs[0] == "help") {
+    cli.showHelp();
   }
 
-  const configs = {
-    ...(await getUserInfo()),
-    durationSeconds: getDurationSeconds(flags),
+  const downloadPath = path.join(path.dirname(process.execPath), "puppeteer");
+  if (process.pkg) {
+    try {
+      await fs.access(downloadPath);
+    } catch {
+      await downloadChromium(downloadPath);
+    }
+  }
+
+  if (inputs[0] === "configure") {
+    await configure(flags.advanced);
+  }
+
+  try {
+    await fs.access(confPath);
+  } catch {
+    console.log(
+      "Configuration file not found, please run aws-cli-saml configure"
+    );
+    process.exit(0);
+  }
+
+  let configs = await loadConfigs(flags);
+  configs = {
+    ...configs,
+    ...(await askPass(configs.userName)),
   };
 
-  const saml = await getSAMLResponse(
-    configs.email,
-    configs.pass,
-    configs.federationUrl
-  );
+  const saml = await getSAMLResponse(configs);
 
   let roles = await parseRoles(saml);
 
@@ -379,4 +509,4 @@ const cli = meow(
   console.log(`aws_session_token  = ${credentials.token}`);
 
   console.log(`Credentials will expire at ${credentials.expiration}`);
-})(cli.flags);
+})(cli.input, cli.flags);

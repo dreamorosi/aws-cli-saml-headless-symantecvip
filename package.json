@@ -19,12 +19,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-sts": "^1.0.0-gamma.8",
-    "dotenv": "^8.2.0",
     "inquirer": "^7.3.3",
     "leven": "^3.1.0",
     "meow": "^7.1.1",
     "puppeteer": "^3.3.0",
-    "xml2js": "^0.4.23"
+    "xml2js": "^0.4.23",
+    "yaml": "^1.10.0"
   },
   "devDependencies": {
     "pkg": "^4.4.9",
