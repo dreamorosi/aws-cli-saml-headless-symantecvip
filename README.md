@@ -2,12 +2,33 @@
 
 Get temporary AWS CLI credentials via STS Assume Role w/ SAML using token retrieved via Enterprise Symantec VIP MFA login.
 
-## Sample Conf file
-```txt
-EMAIL=my.id
-PASS=myPass
-URL=https://mydirectory.com/adfs/ls/idpinitiatedsignon.aspx?loginToRp=urn:amazon:webservices
-DURATION_SECONDS=10800
+## Usage
+```sh
+$ aws-cli-saml <input>
+
+Arguments
+    help            Shows this help message.
+    configure       Initiates configuration flow.
+
+Options
+    --role, -r      IAM Role name or arn to be used for authentication.
+
+    --duration, -d  Duration of temporary credentials in seconds.
+
+    --advanced      Presents additional settings during configuration flow.
+
+    --verbose       Enables verbose logging for troubleshooting.
+
+Examples
+    $ aws-cli-saml
+    $ aws-cli-saml --role my_role_name
+    $ aws-cli-saml --role arn:aws:iam::123456789101:role/my_role_name
+    $ aws-cli-saml --duration 10800
+
+    $ aws-cli-saml configure
+    $ aws-cli-saml configure --advanced
+
+    $ aws-cli-saml --verbose
 ```
 
 ## Further readings

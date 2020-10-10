@@ -49,13 +49,14 @@ Run "aws-cli-saml configure" to recreate it.`
     passInput: configs.passInput || "#passwordInput",
     submitBtn: configs.submitBtn || "#submitButton",
     skipBtn: configs.skipBtn || "#vipSkipBtn",
+    errorEl: configs.errorEl || "#error #errorText",
     durationSeconds: parseInt(
       flags.durationSeconds || process.env.DURATION_SECONDS || 3600
     ),
   };
 };
 
-const getSAMLResponse = async (configs) => {
+const getSAMLResponse = async (configs, isVerbose) => {
   // TODO: proper logging - convert all the console.err to debug when verbose + add additional verbosity for success
   // Start a browser and open a tab.
   let browser;
@@ -74,33 +75,42 @@ const getSAMLResponse = async (configs) => {
     });
     page = await browser.newPage();
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error("Unable to start Chromium headless browser.");
     process.exit(1);
   }
-
-  console.log("Sending Push notification - Get your phone ready!");
 
   // Navigate to the AWS page, this will redirect to the SymantecVIP login page of the org.
   try {
     const response = await page.goto(configs.federationUrl);
     assert(response.ok());
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to navigate to ${configs.federationUrl}.`);
     process.exit(1);
   }
 
-  // TODO: account for wrong credentials
   // Fill login form
   try {
     await page.type(configs.userInput, configs.userName);
     await page.type(configs.passInput, configs.pass);
     await page.click(configs.submitBtn);
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to fill login form.`);
     process.exit(1);
+  }
+
+  let errorText = ''
+  try {
+    await page.waitFor(500)
+    errorText = await page.$eval(configs.errorEl, el => el.innerText);
+    assert(errorText.trim().length === 0);
+    console.log("Sending Push notification - Get your phone ready!");
+  } catch (err) {
+    if (isVerbose) console.error(err);
+    console.error(errorText);
+    process.exit(1)
   }
 
   // Wait for login to be verified and second page to appear.
@@ -108,7 +118,7 @@ const getSAMLResponse = async (configs) => {
     await page.waitFor(configs.skipBtn);
     await page.click(configs.skipBtn);
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to login, page might have timed out, try again.`);
     process.exit(1);
   }
@@ -120,7 +130,7 @@ const getSAMLResponse = async (configs) => {
     let samlResponse = res.request().postData();
     saml = decodeURIComponent(samlResponse.split("SAMLResponse=")[1]);
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to retrieve IdP SAML Response.`);
     process.exit(1);
   }
@@ -130,7 +140,7 @@ const getSAMLResponse = async (configs) => {
     await page.close();
     await browser.close();
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to close Chromium browser.`);
     process.exit(1);
   }
@@ -138,7 +148,7 @@ const getSAMLResponse = async (configs) => {
   return saml;
 };
 
-const parseRoles = async (saml) => {
+const parseRoles = async (saml, isVerbose) => {
   let rolesList;
   try {
     const xmlString = new Buffer.from(saml, "base64").toString("ascii");
@@ -147,7 +157,7 @@ const parseRoles = async (saml) => {
       xml["samlp:Response"].Assertion[0].AttributeStatement[0].Attribute[1]
         .AttributeValue;
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to parse SAML Response and extract IAM Roles.`);
     process.exit(1);
   }
@@ -168,14 +178,15 @@ const parseRoles = async (saml) => {
       });
     });
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error(`Unable to format IAM Roles.`);
     process.exit(1);
   }
 
   try {
     assert(Object.keys(roles).length > 0);
-  } catch {
+  } catch (err) {
+    if (isVerbose) console.error(err);
     console.error(`No role was returned in the SAML response.`);
     process.exit(1);
   }
@@ -250,7 +261,7 @@ const chooseRole = async (roles) => {
   return roles[accountId].find((role) => role.roleArn === roleArn);
 };
 
-const assumeRole = async (chosenRole, saml, durationSeconds) => {
+const assumeRole = async (chosenRole, saml, durationSeconds, isVerbose) => {
   // TODO: proper logging
   var sts = new STS();
   var params = {
@@ -270,7 +281,7 @@ const assumeRole = async (chosenRole, saml, durationSeconds) => {
       expiration: credentials.Expiration,
     };
   } catch (err) {
-    console.error(err);
+    if (isVerbose) console.error(err);
     console.error("Unable to assume IAM Role.");
     process.exit(1);
   }
@@ -349,6 +360,7 @@ const configure = async (isAdvanced) => {
       passInput: "#passwordInput",
       submitBtn: "#submitButton",
       skipBtn: "#vipSkipBtn",
+      errorEl: "#error #errorText"
     };
   }
 
@@ -394,6 +406,12 @@ const configure = async (isAdvanced) => {
         message: "Skip button selector:",
         default: configs.skipBtn,
       },
+      {
+        type: "input",
+        name: "errorEl",
+        message: "Error element selector:",
+        default: configs.errorEl,
+      },
     ];
   }
 
@@ -425,6 +443,8 @@ const cli = meow(
 
     --advanced      Presents additional settings during configuration flow.
 
+    --verbose       Enables verbose logging for troubleshooting.
+
   Examples
     $ aws-cli-saml
     $ aws-cli-saml --role my_role_name
@@ -433,6 +453,8 @@ const cli = meow(
 
     $ aws-cli-saml configure
     $ aws-cli-saml configure --advanced
+
+    $ aws-cli-saml --verbose
 `,
   {
     flags: {
@@ -447,6 +469,9 @@ const cli = meow(
       advanced: {
         type: "boolean",
       },
+      verbose: {
+        type: "boolean",
+      }
     },
   }
 );
@@ -484,9 +509,9 @@ const cli = meow(
     ...(await askPass(configs.userName)),
   };
 
-  const saml = await getSAMLResponse(configs);
+  const saml = await getSAMLResponse(configs, flags.verbose);
 
-  let roles = await parseRoles(saml);
+  let roles = await parseRoles(saml, flags.verbose);
 
   if (flags.role) {
     roles = applyFlagRole(flags.role, roles);
@@ -501,7 +526,8 @@ const cli = meow(
   const credentials = await assumeRole(
     chosenRole,
     saml,
-    configs.durationSeconds
+    configs.durationSeconds,
+    flags.verbose
   );
 
   console.log(`aws_access_key_id = ${credentials.accessKey}`);
