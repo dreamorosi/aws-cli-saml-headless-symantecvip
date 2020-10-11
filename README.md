@@ -2,6 +2,8 @@
 
 Get temporary AWS CLI credentials via STS Assume Role w/ SAML using token retrieved via Enterprise Symantec VIP MFA login.
 
+[![video thumbnail](video_thumbnail.png)](https://youtu.be/AwgIBYWUvMc)
+
 ## Usage
 ```sh
 $ aws-cli-saml <input>
